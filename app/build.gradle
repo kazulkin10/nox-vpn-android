@@ -9,15 +9,17 @@ android {
 
     defaultConfig {
         applicationId "com.nox.vpn"
-        minSdk 24
+        minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "3.0"
     }
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.debug
         }
     }
@@ -29,6 +31,10 @@ android {
 
     kotlinOptions {
         jvmTarget = '17'
+    }
+
+    buildFeatures {
+        viewBinding true
     }
 }
 

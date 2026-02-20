@@ -1,5 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#1a1a2e</color>
-    <color name="ic_launcher_foreground">#4CAF50</color>
+    <!-- Primary -->
+    <color name="primary">#6C63FF</color>
+    <color name="primary_dark">#5A52E0</color>
+    <color name="primary_light">#8B85FF</color>
+
+    <!-- Accent -->
+    <color name="accent">#00D9FF</color>
+    <color name="accent_green">#00E676</color>
+    <color name="accent_yellow">#FFD600</color>
+    <color name="accent_red">#FF5252</color>
+
+    <!-- Background -->
+    <color name="bg_dark">#0D0D1A</color>
+    <color name="bg_card">#1A1A2E</color>
+    <color name="bg_card_elevated">#252542</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0B0C0</color>
+    <color name="text_hint">#6B6B80</color>
+
+    <!-- Status -->
+    <color name="status_connected">#00E676</color>
+    <color name="status_connecting">#FFD600</color>
+    <color name="status_disconnected">#6B6B80</color>
+    <color name="status_error">#FF5252</color>
+
+    <!-- Gradient -->
+    <color name="gradient_start">#6C63FF</color>
+    <color name="gradient_end">#00D9FF</color>
+
+    <!-- Legacy -->
+    <color name="ic_launcher_background">#0D0D1A</color>
+    <color name="ic_launcher_foreground">#6C63FF</color>
 </resources>
