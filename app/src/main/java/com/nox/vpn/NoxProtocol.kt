@@ -1,9 +1,12 @@
 package com.nox.vpn
 
 import android.util.Log
-import com.google.crypto.tink.subtle.XChaCha20Poly1305
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
+import org.bouncycastle.crypto.engines.ChaCha7539Engine
+import org.bouncycastle.crypto.macs.Poly1305
+import org.bouncycastle.crypto.params.KeyParameter
+import org.bouncycastle.crypto.params.ParametersWithIV
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
@@ -12,7 +15,8 @@ import java.security.SecureRandom
 import javax.net.ssl.SSLSocket
 
 /**
- * NOX v3 Protocol Implementation using Google Tink
+ * NOX v3 Protocol Implementation
+ * Uses BouncyCastle for XChaCha20-Poly1305 with explicit nonce control
  *
  * Handshake:
  * 1. Client generates ephemeral X25519 keypair
@@ -92,12 +96,11 @@ class NoxProtocol(
         )
         Log.d(TAG, "Early key: ${earlyKey.toHex()}")
 
-        // Encrypt ClientHello using Tink's XChaCha20-Poly1305
+        // Encrypt ClientHello using XChaCha20-Poly1305 (BouncyCastle)
         val nonce = ByteArray(NONCE_SIZE)
         random.nextBytes(nonce)
 
-        val earlyCipher = XChaCha20Poly1305(earlyKey)
-        val ciphertext = earlyCipher.encrypt(payloadBytes, nonce)
+        val ciphertext = xchachaSeal(earlyKey, nonce, payloadBytes)
 
         Log.d(TAG, "Nonce: ${nonce.toHex()}")
         Log.d(TAG, "Ciphertext length: ${ciphertext.size}")
@@ -164,8 +167,8 @@ class NoxProtocol(
             "noxv3-serverhello".toByteArray(),
             KEY_SIZE
         )
-        val hsCipher = XChaCha20Poly1305(hsKey)
-        val serverPayload = hsCipher.decrypt(serverCiphertext, serverNonce)
+        val serverPayload = xchachaOpen(hsKey, serverNonce, serverCiphertext)
+            ?: throw Exception("Failed to decrypt ServerHello")
 
         // Parse ServerHello
         // Format: padding_len(1) + padding + server_ephemeral(32) + ipv4(4) + ipv6(16) + prefix4(1) + prefix6(1) + mtu(2) + session(8) + time(8)
@@ -256,6 +259,209 @@ class NoxProtocol(
 
     fun getAssignedIp(): String = assignedIp
 
+    // ============ XChaCha20-Poly1305 using BouncyCastle ============
+
+    /**
+     * HChaCha20 - derives subkey from key and first 16 bytes of nonce
+     */
+    private fun hchacha20(key: ByteArray, nonce16: ByteArray): ByteArray {
+        require(key.size == 32) { "Key must be 32 bytes" }
+        require(nonce16.size == 16) { "Nonce must be 16 bytes" }
+
+        // Constants "expand 32-byte k"
+        val state = IntArray(16)
+        state[0] = 0x61707865
+        state[1] = 0x3320646e
+        state[2] = 0x79622d32
+        state[3] = 0x6b206574
+
+        // Key
+        for (i in 0..7) {
+            state[4 + i] = littleEndianToInt(key, i * 4)
+        }
+
+        // Nonce
+        for (i in 0..3) {
+            state[12 + i] = littleEndianToInt(nonce16, i * 4)
+        }
+
+        // 20 rounds
+        for (i in 0..9) {
+            quarterRound(state, 0, 4, 8, 12)
+            quarterRound(state, 1, 5, 9, 13)
+            quarterRound(state, 2, 6, 10, 14)
+            quarterRound(state, 3, 7, 11, 15)
+            quarterRound(state, 0, 5, 10, 15)
+            quarterRound(state, 1, 6, 11, 12)
+            quarterRound(state, 2, 7, 8, 13)
+            quarterRound(state, 3, 4, 9, 14)
+        }
+
+        // Extract output (first 4 and last 4 words)
+        val output = ByteArray(32)
+        intToLittleEndian(state[0], output, 0)
+        intToLittleEndian(state[1], output, 4)
+        intToLittleEndian(state[2], output, 8)
+        intToLittleEndian(state[3], output, 12)
+        intToLittleEndian(state[12], output, 16)
+        intToLittleEndian(state[13], output, 20)
+        intToLittleEndian(state[14], output, 24)
+        intToLittleEndian(state[15], output, 28)
+
+        return output
+    }
+
+    private fun quarterRound(state: IntArray, a: Int, b: Int, c: Int, d: Int) {
+        state[a] = state[a] + state[b]; state[d] = rotl32(state[d] xor state[a], 16)
+        state[c] = state[c] + state[d]; state[b] = rotl32(state[b] xor state[c], 12)
+        state[a] = state[a] + state[b]; state[d] = rotl32(state[d] xor state[a], 8)
+        state[c] = state[c] + state[d]; state[b] = rotl32(state[b] xor state[c], 7)
+    }
+
+    private fun rotl32(v: Int, n: Int): Int = (v shl n) or (v ushr (32 - n))
+
+    private fun littleEndianToInt(bs: ByteArray, off: Int): Int =
+        (bs[off].toInt() and 0xFF) or
+        ((bs[off + 1].toInt() and 0xFF) shl 8) or
+        ((bs[off + 2].toInt() and 0xFF) shl 16) or
+        ((bs[off + 3].toInt() and 0xFF) shl 24)
+
+    private fun intToLittleEndian(n: Int, bs: ByteArray, off: Int) {
+        bs[off] = n.toByte()
+        bs[off + 1] = (n ushr 8).toByte()
+        bs[off + 2] = (n ushr 16).toByte()
+        bs[off + 3] = (n ushr 24).toByte()
+    }
+
+    /**
+     * XChaCha20-Poly1305 encryption with explicit nonce
+     */
+    private fun xchachaSeal(key: ByteArray, nonce24: ByteArray, plaintext: ByteArray): ByteArray {
+        require(nonce24.size == 24) { "Nonce must be 24 bytes" }
+
+        // Derive subkey using HChaCha20
+        val subkey = hchacha20(key, nonce24.sliceArray(0..15))
+
+        // Create ChaCha20 nonce: 4 zero bytes + last 8 bytes of original nonce
+        val chacha20Nonce = ByteArray(12)
+        System.arraycopy(nonce24, 16, chacha20Nonce, 4, 8)
+
+        // Encrypt with ChaCha20
+        val engine = ChaCha7539Engine()
+        engine.init(true, ParametersWithIV(KeyParameter(subkey), chacha20Nonce))
+
+        // Generate Poly1305 key (first 32 bytes of keystream)
+        val polyKey = ByteArray(64)
+        engine.processBytes(polyKey, 0, 64, polyKey, 0)
+        val poly1305Key = polyKey.sliceArray(0..31)
+
+        // Encrypt plaintext
+        val ciphertext = ByteArray(plaintext.size)
+        engine.processBytes(plaintext, 0, plaintext.size, ciphertext, 0)
+
+        // Compute Poly1305 tag
+        val mac = Poly1305()
+        mac.init(KeyParameter(poly1305Key))
+        mac.update(ciphertext, 0, ciphertext.size)
+
+        // Padding for ciphertext
+        val padLen = (16 - (ciphertext.size % 16)) % 16
+        if (padLen > 0) {
+            mac.update(ByteArray(padLen), 0, padLen)
+        }
+
+        // Lengths (8 bytes each, little-endian)
+        val lenBuf = ByteArray(16)
+        longToLittleEndian(0L, lenBuf, 0) // no AAD
+        longToLittleEndian(plaintext.size.toLong(), lenBuf, 8)
+        mac.update(lenBuf, 0, 16)
+
+        val tag = ByteArray(16)
+        mac.doFinal(tag, 0)
+
+        // Return ciphertext + tag
+        return ciphertext + tag
+    }
+
+    /**
+     * XChaCha20-Poly1305 decryption with explicit nonce
+     */
+    private fun xchachaOpen(key: ByteArray, nonce24: ByteArray, ciphertextWithTag: ByteArray): ByteArray? {
+        require(nonce24.size == 24) { "Nonce must be 24 bytes" }
+        if (ciphertextWithTag.size < TAG_SIZE) return null
+
+        val ciphertext = ciphertextWithTag.sliceArray(0 until ciphertextWithTag.size - TAG_SIZE)
+        val tag = ciphertextWithTag.sliceArray(ciphertextWithTag.size - TAG_SIZE until ciphertextWithTag.size)
+
+        // Derive subkey using HChaCha20
+        val subkey = hchacha20(key, nonce24.sliceArray(0..15))
+
+        // Create ChaCha20 nonce
+        val chacha20Nonce = ByteArray(12)
+        System.arraycopy(nonce24, 16, chacha20Nonce, 4, 8)
+
+        // Generate Poly1305 key
+        val engine = ChaCha7539Engine()
+        engine.init(true, ParametersWithIV(KeyParameter(subkey), chacha20Nonce))
+        val polyKey = ByteArray(64)
+        engine.processBytes(polyKey, 0, 64, polyKey, 0)
+        val poly1305Key = polyKey.sliceArray(0..31)
+
+        // Verify tag
+        val mac = Poly1305()
+        mac.init(KeyParameter(poly1305Key))
+        mac.update(ciphertext, 0, ciphertext.size)
+
+        val padLen = (16 - (ciphertext.size % 16)) % 16
+        if (padLen > 0) {
+            mac.update(ByteArray(padLen), 0, padLen)
+        }
+
+        val lenBuf = ByteArray(16)
+        longToLittleEndian(0L, lenBuf, 0)
+        longToLittleEndian(ciphertext.size.toLong(), lenBuf, 8)
+        mac.update(lenBuf, 0, 16)
+
+        val computedTag = ByteArray(16)
+        mac.doFinal(computedTag, 0)
+
+        if (!constantTimeEquals(tag, computedTag)) {
+            Log.e(TAG, "Tag verification failed")
+            return null
+        }
+
+        // Decrypt
+        engine.init(true, ParametersWithIV(KeyParameter(subkey), chacha20Nonce))
+        // Skip first 64 bytes (Poly1305 key)
+        val skip = ByteArray(64)
+        engine.processBytes(skip, 0, 64, skip, 0)
+
+        val plaintext = ByteArray(ciphertext.size)
+        engine.processBytes(ciphertext, 0, ciphertext.size, plaintext, 0)
+
+        return plaintext
+    }
+
+    private fun longToLittleEndian(n: Long, bs: ByteArray, off: Int) {
+        bs[off] = n.toByte()
+        bs[off + 1] = (n ushr 8).toByte()
+        bs[off + 2] = (n ushr 16).toByte()
+        bs[off + 3] = (n ushr 24).toByte()
+        bs[off + 4] = (n ushr 32).toByte()
+        bs[off + 5] = (n ushr 40).toByte()
+        bs[off + 6] = (n ushr 48).toByte()
+        bs[off + 7] = (n ushr 56).toByte()
+    }
+
+    private fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {
+        if (a.size != b.size) return false
+        var result = 0
+        for (i in a.indices) {
+            result = result or (a[i].toInt() xor b[i].toInt())
+        }
+        return result == 0
+    }
+
     // ============ Helpers ============
 
     private fun sha256(data: ByteArray): ByteArray {
@@ -277,12 +483,11 @@ class NoxProtocol(
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     /**
-     * Cipher state for data frames using Tink
+     * Cipher state for data frames
      */
     inner class NoxCipher(private val key: ByteArray) {
         private var seq: Long = 0
         private val lengthKey = Hkdf.computeHkdf("HMACSHA256", key, null, "noxv3-length".toByteArray(), KEY_SIZE)
-        private val aead = XChaCha20Poly1305(key)
 
         fun nextSeq(): Long = seq++
         fun currentSeq(): Long = seq
@@ -290,18 +495,13 @@ class NoxProtocol(
         fun seal(plaintext: ByteArray): ByteArray {
             val currentSeq = nextSeq()
             val nonce = buildNonce(currentSeq)
-            return aead.encrypt(plaintext, nonce)
+            return xchachaSeal(key, nonce, plaintext)
         }
 
         fun open(ciphertext: ByteArray): ByteArray? {
             val currentSeq = seq++
             val nonce = buildNonce(currentSeq)
-            return try {
-                aead.decrypt(ciphertext, nonce)
-            } catch (e: Exception) {
-                Log.e(TAG, "Decryption failed: ${e.message}")
-                null
-            }
+            return xchachaOpen(key, nonce, ciphertext)
         }
 
         fun lengthMask(seq: Long): ByteArray {
