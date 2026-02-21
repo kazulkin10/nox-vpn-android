@@ -58,7 +58,7 @@ class NoxVpnService : VpnService() {
     private var fallbackMode = false
 
     private var serverHost = ""
-    private var serverPort = 8443
+    private var serverPort = 443
     private var serverSni = "www.sberbank.ru"
     private var serverPublicKey = ""
 
@@ -76,7 +76,7 @@ class NoxVpnService : VpnService() {
 
         // Get config from intent
         serverHost = intent?.getStringExtra("host") ?: "194.5.79.246"
-        serverPort = intent?.getIntExtra("port", 8443) ?: 8443
+        serverPort = intent?.getIntExtra("port", 443) ?: 443
         serverSni = intent?.getStringExtra("sni") ?: "www.sberbank.ru"
         serverPublicKey = intent?.getStringExtra("publicKey")
             ?: "108c5e2765fd1ee8152fe10d093dd2129cfd7ee55da916605fd2125108d9b565"
