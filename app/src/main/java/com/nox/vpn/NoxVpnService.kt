@@ -17,6 +17,9 @@ import java.net.InetSocketAddress
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+import java.security.cert.X509Certificate
 
 class NoxVpnService : VpnService() {
 
@@ -166,8 +169,14 @@ class NoxVpnService : VpnService() {
         Log.d(TAG, "Connecting to $serverHost:$serverPort (SNI: $serverSni)")
 
         // Create SSL socket with custom SNI
+        // Trust all certificates (we verify server via NOX handshake with server public key)
+        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        })
         val sslContext = SSLContext.getInstance("TLSv1.3")
-        sslContext.init(null, null, null)
+        sslContext.init(null, trustAllCerts, java.security.SecureRandom())
         val factory = sslContext.socketFactory as SSLSocketFactory
 
         val socket = factory.createSocket() as SSLSocket
