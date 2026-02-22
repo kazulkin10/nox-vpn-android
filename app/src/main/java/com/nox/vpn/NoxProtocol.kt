@@ -12,7 +12,7 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.SecureRandom
-import javax.net.ssl.SSLSocket
+import java.net.Socket
 
 /**
  * NOX v3 Protocol Implementation
@@ -29,7 +29,7 @@ import javax.net.ssl.SSLSocket
  */
 class NoxProtocol(
     private val serverPublicKey: ByteArray,
-    private val socket: SSLSocket
+    private val socket: Socket  // Changed from SSLSocket to Socket for Reality XTLS compatibility
 ) {
     companion object {
         const val TAG = "NoxProtocol"

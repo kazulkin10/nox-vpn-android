@@ -55,7 +55,7 @@ class NoxVpnService : VpnService() {
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
-    private var sslSocket: SSLSocket? = null
+    private var activeSocket: java.net.Socket? = null  // Can be SSLSocket or raw Socket
     private var noxProtocol: NoxProtocol? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var fallbackMode = false
@@ -156,8 +156,8 @@ class NoxVpnService : VpnService() {
                 }
 
                 // Close old socket
-                try { sslSocket?.close() } catch (_: Exception) {}
-                sslSocket = null
+                try { activeSocket?.close() } catch (_: Exception) {}
+                activeSocket = null
                 noxProtocol = null
 
                 delay(delay)
@@ -168,45 +168,52 @@ class NoxVpnService : VpnService() {
     private suspend fun connectToServer() = withContext(Dispatchers.IO) {
         Log.d(TAG, "Connecting to $serverHost:$serverPort (SNI: $serverSni)")
 
-        // Create SSL socket with custom SNI
-        // Trust all certificates (we verify server via NOX handshake with server public key)
-        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-        })
-        val sslContext = SSLContext.getInstance("TLSv1.3")
-        sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-        val factory = sslContext.socketFactory as SSLSocketFactory
-
-        val socket = factory.createSocket() as SSLSocket
-        socket.connect(InetSocketAddress(serverHost, serverPort), 10000)
-
-        // Set SNI
-        val sslParams = socket.sslParameters
-        sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(serverSni))
-        socket.sslParameters = sslParams
-
-        // Configure protocols
-        socket.enabledProtocols = arrayOf("TLSv1.3", "TLSv1.2")
-        socket.soTimeout = 30000
-
-        // Start TLS handshake
-        socket.startHandshake()
-        Log.d(TAG, "TLS handshake complete")
-
-        sslSocket = socket
-
-        // Reality v2: Send auth before NOX handshake
         val pubKey = hexToBytes(serverPublicKey)
-        val auth = generateRealityAuth(pubKey)
-        socket.outputStream.write(auth)
-        socket.outputStream.flush()
-        Log.d(TAG, "Reality auth sent: ${auth.size} bytes")
+        var socket: java.net.Socket? = null
+
+        // Try Reality XTLS first (REAL certificate, score=0)
+        try {
+            Log.d(TAG, "Trying Reality XTLS mode...")
+            val xtlsClient = RealityXtlsClient(pubKey, serverHost, serverPort, serverSni)
+            socket = xtlsClient.connect()
+            Log.d(TAG, "Reality XTLS connected!")
+        } catch (e: Exception) {
+            Log.w(TAG, "Reality XTLS failed: ${e.message}, falling back to standard TLS")
+
+            // Fallback to standard TLS
+            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            })
+            val sslContext = SSLContext.getInstance("TLSv1.3")
+            sslContext.init(null, trustAllCerts, java.security.SecureRandom())
+            val factory = sslContext.socketFactory as SSLSocketFactory
+
+            val fallbackSsl = factory.createSocket() as SSLSocket
+            fallbackSsl.connect(InetSocketAddress(serverHost, serverPort), 10000)
+            fallbackSsl.sslParameters = fallbackSsl.sslParameters.apply {
+                serverNames = listOf(javax.net.ssl.SNIHostName(serverSni))
+            }
+            fallbackSsl.enabledProtocols = arrayOf("TLSv1.3", "TLSv1.2")
+            fallbackSsl.soTimeout = 30000
+            fallbackSsl.startHandshake()
+
+            // Send Reality v2 auth after TLS
+            val auth = generateRealityAuth(pubKey)
+            fallbackSsl.outputStream.write(auth)
+            fallbackSsl.outputStream.flush()
+            Log.d(TAG, "Reality v2 auth sent: ${auth.size} bytes")
+
+            socket = fallbackSsl
+        }
+
+        activeSocket = socket
+        Log.d(TAG, "TLS handshake complete")
 
         // Try NOX protocol handshake
         try {
-            val protocol = NoxProtocol(pubKey, socket)
+            val protocol = NoxProtocol(pubKey, socket!!)
             val assignedIp = protocol.handshake()
 
             Log.d(TAG, "NOX handshake complete, assigned IP: $assignedIp")
@@ -224,9 +231,9 @@ class NoxVpnService : VpnService() {
             Log.e(TAG, "NOX handshake failed: ${e.message}, switching to FALLBACK mode")
 
             // Close failed socket - we don't need it in fallback
-            try { socket.close() } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
 
-            sslSocket = null
+            activeSocket = null
             noxProtocol = null
             fallbackMode = true
             isFallbackMode = true
@@ -378,14 +385,14 @@ class NoxVpnService : VpnService() {
         scope.cancel()
 
         try {
-            sslSocket?.close()
+            activeSocket?.close()
         } catch (e: Exception) {}
 
         try {
             vpnInterface?.close()
         } catch (e: Exception) {}
 
-        sslSocket = null
+        activeSocket = null
         noxProtocol = null
         vpnInterface = null
         bytesIn = 0
