@@ -62,7 +62,7 @@ class NoxVpnService : VpnService() {
 
     private var serverHost = ""
     private var serverPort = 443
-    private var serverSni = "www.sberbank.ru"
+    private var serverSni = "www.gosuslugi.ru"
     private var serverPublicKey = ""
 
     override fun onCreate() {
