@@ -33,3 +33,17 @@ jobs:
       with:
         name: nox-vpn-simple
         path: app/build/outputs/apk/release/*.apk
+
+    - name: Get version
+      id: version
+      run: echo "version=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.version.outputs.version }}
+        name: NOX VPN v${{ steps.version.outputs.version }}
+        files: app/build/outputs/apk/release/*.apk
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
