@@ -30,7 +30,7 @@ class NoxVpnService : VpnService() {
 
         // VPN Configuration
         const val VPN_ROUTE = "0.0.0.0"
-        const val VPN_DNS = "8.8.8.8"
+        const val VPN_DNS = "94.140.14.14"  // AdGuard DNS - блокирует рекламу
         const val VPN_MTU = 1280
 
         // Auto-reconnect settings
@@ -249,7 +249,7 @@ class NoxVpnService : VpnService() {
             .addAddress(assignedIp, 24)
             .addRoute(VPN_ROUTE, 0)
             .addDnsServer(VPN_DNS)
-            .addDnsServer("1.1.1.1")
+            .addDnsServer("94.140.15.15")  // AdGuard DNS backup
             .setBlocking(true)
 
         // Route all traffic through VPN (split tunnel)
