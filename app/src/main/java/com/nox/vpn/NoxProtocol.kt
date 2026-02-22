@@ -66,7 +66,7 @@ class NoxProtocol(
         random.nextBytes(padding)
 
         val timestamp = System.currentTimeMillis() * 1000 // microseconds
-        val caps: Short = 0x20 // CapBatch
+        val caps: Short = 0x00 // Simple frame mode (not batch!)
         val mtu: Short = MTU.toShort()
         val sessionId = ByteArray(8)
         random.nextBytes(sessionId)
@@ -195,66 +195,83 @@ class NoxProtocol(
 
     /**
      * Send a VPN packet through the NOX tunnel
+     * Server protocol: encrypted_length(2) + ciphertext
+     * Frame format: type(1) + flags(1) + padding_len(1) + data
      */
     fun sendPacket(data: ByteArray) {
-        // Frame: type(1) + data
-        val frame = ByteArray(1 + data.size)
-        frame[0] = FRAME_TYPE_DATA
-        System.arraycopy(data, 0, frame, 1, data.size)
+        // Frame: type(1) + flags(1) + padding_len(1) + data
+        val frame = ByteArray(3 + data.size)
+        frame[0] = FRAME_TYPE_DATA  // type
+        frame[1] = 0                // flags
+        frame[2] = 0                // padding_len
+        System.arraycopy(data, 0, frame, 3, data.size)
 
-        // Encrypt
-        val seq = txCipher.nextSeq()
+        // Encrypt frame - txCipher.seal() uses current seq then increments
         val encrypted = txCipher.seal(frame)
 
-        // Wire: encrypted_length(4) + ciphertext
-        val lenBytes = ByteArray(4)
-        val mask = txCipher.lengthMask(seq)
-        ByteBuffer.wrap(lenBytes).order(ByteOrder.BIG_ENDIAN).putInt(encrypted.size)
-        for (i in 0..3) {
-            lenBytes[i] = (lenBytes[i].toInt() xor mask[i].toInt()).toByte()
-        }
+        // Get seq AFTER seal (server uses seq after increment for length encryption)
+        val seq = txCipher.currentSeq()
 
-        val wire = ByteArray(4 + encrypted.size)
-        System.arraycopy(lenBytes, 0, wire, 0, 4)
-        System.arraycopy(encrypted, 0, wire, 4, encrypted.size)
+        // Wire: encrypted_length(2) + ciphertext (server uses 2 bytes!)
+        val lenBytes = ByteArray(2)
+        val mask = txCipher.lengthMask2(seq)
+        lenBytes[0] = ((encrypted.size shr 8) and 0xFF).toByte()
+        lenBytes[1] = (encrypted.size and 0xFF).toByte()
+        lenBytes[0] = (lenBytes[0].toInt() xor mask[0].toInt()).toByte()
+        lenBytes[1] = (lenBytes[1].toInt() xor mask[1].toInt()).toByte()
+
+        val wire = ByteArray(2 + encrypted.size)
+        System.arraycopy(lenBytes, 0, wire, 0, 2)
+        System.arraycopy(encrypted, 0, wire, 2, encrypted.size)
 
         socket.outputStream.write(wire)
+        socket.outputStream.flush()
     }
 
     /**
      * Receive a VPN packet from the NOX tunnel
+     * Server protocol: encrypted_length(2) + ciphertext
+     * Frame format: type(1) + flags(1) + padding_len(1) + padding + data
      * @return the decrypted packet data, or null if non-data frame
      */
     fun receivePacket(): ByteArray? {
         val input = socket.inputStream
 
-        // Read encrypted length (4 bytes)
-        val lenBytes = readFull(input, 4)
-        val seq = rxCipher.currentSeq()
-        val mask = rxCipher.lengthMask(seq)
-        for (i in 0..3) {
-            lenBytes[i] = (lenBytes[i].toInt() xor mask[i].toInt()).toByte()
-        }
-        val length = ByteBuffer.wrap(lenBytes).order(ByteOrder.BIG_ENDIAN).int
+        // Read encrypted length (2 bytes - server uses 2!)
+        val lenBytes = readFull(input, 2)
 
-        if (length < TAG_SIZE || length > MTU + 1 + TAG_SIZE + 100) {
+        // Increment seq BEFORE decryption (server does this)
+        rxCipher.incrementSeq()
+        val seq = rxCipher.currentSeq()
+
+        val mask = rxCipher.lengthMask2(seq)
+        lenBytes[0] = (lenBytes[0].toInt() xor mask[0].toInt()).toByte()
+        lenBytes[1] = (lenBytes[1].toInt() xor mask[1].toInt()).toByte()
+        val length = ((lenBytes[0].toInt() and 0xFF) shl 8) or (lenBytes[1].toInt() and 0xFF)
+
+        if (length < TAG_SIZE || length > MTU + 3 + TAG_SIZE + 256) {
             throw Exception("Invalid frame length: $length")
         }
 
         // Read ciphertext
         val ciphertext = readFull(input, length)
 
-        // Decrypt
-        val frame = rxCipher.open(ciphertext)
+        // Decrypt using seq-1 (server does Open(fc.rxSeq-1, ...))
+        val frame = rxCipher.open(seq - 1, ciphertext)
             ?: throw Exception("Decryption failed")
 
-        // Parse frame
-        if (frame.isEmpty()) return null
+        // Parse frame: type(1) + flags(1) + padding_len(1) + padding + data
+        if (frame.size < 3) return null
         val frameType = frame[0]
+        // val flags = frame[1]  // not used for now
+        val paddingLen = frame[2].toInt() and 0xFF
+
+        if (frame.size < 3 + paddingLen) return null
 
         if (frameType != FRAME_TYPE_DATA) return null
 
-        return frame.sliceArray(1 until frame.size)
+        // Return data after header and padding
+        return frame.sliceArray(3 + paddingLen until frame.size)
     }
 
     fun getAssignedIp(): String = assignedIp
@@ -484,33 +501,47 @@ class NoxProtocol(
 
     /**
      * Cipher state for data frames
+     * Matches server's CipherState implementation
      */
     inner class NoxCipher(private val key: ByteArray) {
         private var seq: Long = 0
         private val lengthKey = Hkdf.computeHkdf("HMACSHA256", key, null, "noxv3-length".toByteArray(), KEY_SIZE)
 
-        fun nextSeq(): Long = seq++
+        fun incrementSeq() { seq++ }
         fun currentSeq(): Long = seq
 
+        /**
+         * Encrypt plaintext. Uses current seq, then increments.
+         * Matches server: Seal(plaintext) then txSeq++
+         */
         fun seal(plaintext: ByteArray): ByteArray {
-            val currentSeq = nextSeq()
+            val currentSeq = seq
+            seq++
             val nonce = buildNonce(currentSeq)
             return xchachaSeal(key, nonce, plaintext)
         }
 
-        fun open(ciphertext: ByteArray): ByteArray? {
-            val currentSeq = seq++
-            val nonce = buildNonce(currentSeq)
+        /**
+         * Decrypt ciphertext using specific seq.
+         * Matches server: Open(rxSeq-1, ciphertext)
+         */
+        fun open(useSeq: Long, ciphertext: ByteArray): ByteArray? {
+            val nonce = buildNonce(useSeq)
             return xchachaOpen(key, nonce, ciphertext)
         }
 
-        fun lengthMask(seq: Long): ByteArray {
-            val mask = ByteArray(4)
+        /**
+         * Generate 2-byte length mask for given seq.
+         * Matches server's lengthMask() for EncryptLength/DecryptLength
+         * Server code: mask[0] = lengthKey[0] ^ seqBytes[6]
+         *              mask[1] = lengthKey[1] ^ seqBytes[7]
+         */
+        fun lengthMask2(seq: Long): ByteArray {
+            val mask = ByteArray(2)
             val seqBytes = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(seq).array()
-            mask[0] = (lengthKey[0].toInt() xor seqBytes[4].toInt()).toByte()
-            mask[1] = (lengthKey[1].toInt() xor seqBytes[5].toInt()).toByte()
-            mask[2] = (lengthKey[2].toInt() xor seqBytes[6].toInt()).toByte()
-            mask[3] = (lengthKey[3].toInt() xor seqBytes[7].toInt()).toByte()
+            // Server uses last 2 bytes of seq (indices 6, 7)
+            mask[0] = (lengthKey[0].toInt() xor seqBytes[6].toInt()).toByte()
+            mask[1] = (lengthKey[1].toInt() xor seqBytes[7].toInt()).toByte()
             return mask
         }
 
