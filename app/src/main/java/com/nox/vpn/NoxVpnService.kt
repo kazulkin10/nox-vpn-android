@@ -213,7 +213,7 @@ class NoxVpnService : VpnService() {
 
         // Try NOX protocol handshake
         try {
-            val protocol = NoxProtocol(pubKey, socket!!)
+            val protocol = NoxProtocol(pubKey, socket ?: throw Exception("Socket is null"))
             val assignedIp = protocol.handshake()
 
             Log.d(TAG, "NOX handshake complete, assigned IP: $assignedIp")
@@ -232,6 +232,7 @@ class NoxVpnService : VpnService() {
 
             // Close failed socket - we don't need it in fallback
             try { socket?.close() } catch (_: Exception) {}
+            socket = null
 
             activeSocket = null
             noxProtocol = null
