@@ -197,9 +197,15 @@ class NoxVpnService : VpnService() {
 
         sslSocket = socket
 
+        // Reality v2: Send auth before NOX handshake
+        val pubKey = hexToBytes(serverPublicKey)
+        val auth = generateRealityAuth(pubKey)
+        socket.outputStream.write(auth)
+        socket.outputStream.flush()
+        Log.d(TAG, "Reality auth sent: ${auth.size} bytes")
+
         // Try NOX protocol handshake
         try {
-            val pubKey = hexToBytes(serverPublicKey)
             val protocol = NoxProtocol(pubKey, socket)
             val assignedIp = protocol.handshake()
 
@@ -456,5 +462,35 @@ class NoxVpnService : VpnService() {
             i += 2
         }
         return data
+    }
+
+    /**
+     * Generate Reality v2 authentication data
+     * Format: hmac_tag(24) + timestamp(8) = 32 bytes
+     * Server verifies: HMAC-SHA256(server_pubkey, server_pubkey + timestamp)
+     */
+    private fun generateRealityAuth(serverPubKey: ByteArray): ByteArray {
+        val auth = ByteArray(32)
+
+        // Timestamp (8 bytes, big-endian, Unix seconds)
+        val timestamp = System.currentTimeMillis() / 1000
+        val timestampBytes = java.nio.ByteBuffer.allocate(8)
+            .order(java.nio.ByteOrder.BIG_ENDIAN)
+            .putLong(timestamp)
+            .array()
+
+        // HMAC-SHA256(server_pubkey, server_pubkey + timestamp)
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(serverPubKey, "HmacSHA256"))
+        mac.update(serverPubKey)
+        mac.update(timestampBytes)
+        val hmacFull = mac.doFinal()
+
+        // auth = hmac[:24] + timestamp
+        System.arraycopy(hmacFull, 0, auth, 0, 24)
+        System.arraycopy(timestampBytes, 0, auth, 24, 8)
+
+        Log.d(TAG, "Generated Reality auth, timestamp=$timestamp")
+        return auth
     }
 }
