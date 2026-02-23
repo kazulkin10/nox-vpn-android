@@ -131,7 +131,18 @@ class RealityXtlsClient(
 
         L.d(TAG, "Reality XTLS handshake complete!")
         L.d(TAG, "Socket connected=${socket?.isConnected}, closed=${socket?.isClosed}")
-        L.d(TAG, "Returning socket for NOX protocol, input available=${inputStream?.available()}")
+
+        // CRITICAL: Drain any remaining TLS data from ya.ru before NOX handshake
+        // These are Application Data records (EncryptedExtensions, Certificate, etc.)
+        val available = inputStream?.available() ?: 0
+        L.d(TAG, "Draining $available bytes of remaining TLS data...")
+        if (available > 0) {
+            val drain = ByteArray(available)
+            inputStream?.read(drain)
+            L.d(TAG, "Drained $available bytes")
+        }
+
+        L.d(TAG, "Buffer clear, ready for NOX protocol")
         return socket!!
     }
 

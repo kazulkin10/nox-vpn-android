@@ -11,8 +11,8 @@ android {
         applicationId "com.nox.vpn"
         minSdk 26
         targetSdk 34
-        versionCode 48
-        versionName "4.8-logs"
+        versionCode 49
+        versionName "4.9-fix"
     }
 
     buildTypes {

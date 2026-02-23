@@ -11,7 +11,8 @@
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="NOX VPN"
-        android:theme="@style/Theme.NoxVPN">
+        android:theme="@style/Theme.NoxVPN"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
