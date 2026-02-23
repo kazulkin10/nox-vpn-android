@@ -67,9 +67,12 @@ class RealityXtlsClient(
         ephemeralPrivate = (keyPair.private as X25519PrivateKeyParameters).encoded
         ephemeralPublic = (keyPair.public as X25519PublicKeyParameters).encoded
 
-        // Generate auth session_id: pubkey(32) + timestamp(8) + hmac(8) = 48 bytes
-        val sessionId = generateAuthSessionId()
-        Log.d(TAG, "Generated auth session_id: ${sessionId.size} bytes")
+        // Generate auth: pubkey in client_random, timestamp+hmac in session_id
+        // TLS 1.3 limits session_id to 32 bytes, so we split:
+        // - client_random (32 bytes) = ephemeral pubkey
+        // - session_id (12 bytes) = timestamp(4) + hmac(8)
+        val (authClientRandom, authSessionId) = generateAuthData()
+        Log.d(TAG, "Generated auth: client_random=${authClientRandom.size}b, session_id=${authSessionId.size}b")
 
         // Connect TCP
         socket = Socket()
@@ -79,8 +82,8 @@ class RealityXtlsClient(
         inputStream = socket!!.getInputStream()
         outputStream = socket!!.getOutputStream()
 
-        // Build and send ClientHello with our session_id
-        val clientHello = buildClientHello(sni, sessionId)
+        // Build and send ClientHello with our auth data
+        val clientHello = buildClientHello(sni, authClientRandom, authSessionId)
         outputStream!!.write(clientHello)
         outputStream!!.flush()
         Log.d(TAG, "Sent ClientHello: ${clientHello.size} bytes")
@@ -128,32 +131,41 @@ class RealityXtlsClient(
         return socket!!
     }
 
-    private fun generateAuthSessionId(): ByteArray {
-        val sessionId = ByteArray(48)
+    /**
+     * Generate auth data split between client_random and session_id
+     * TLS 1.3 limits session_id to 32 bytes!
+     *
+     * Returns Pair(clientRandom, sessionId):
+     * - clientRandom (32 bytes) = ephemeral X25519 pubkey
+     * - sessionId (12 bytes) = timestamp(4) + hmac(8)
+     */
+    private fun generateAuthData(): Pair<ByteArray, ByteArray> {
+        // client_random = ephemeral pubkey (32 bytes)
+        val clientRandom = ephemeralPublic!!.copyOf()
 
-        // pubkey (32 bytes)
-        System.arraycopy(ephemeralPublic!!, 0, sessionId, 0, 32)
+        // session_id = timestamp(4) + hmac(8) = 12 bytes
+        val sessionId = ByteArray(12)
 
-        // timestamp (8 bytes, big-endian)
-        val timestamp = System.currentTimeMillis() / 1000
-        ByteBuffer.wrap(sessionId, 32, 8)
+        // timestamp (4 bytes, big-endian, seconds)
+        val timestamp = (System.currentTimeMillis() / 1000).toInt()
+        ByteBuffer.wrap(sessionId, 0, 4)
             .order(ByteOrder.BIG_ENDIAN)
-            .putLong(timestamp)
+            .putInt(timestamp)
 
         // HMAC-SHA256(serverPubKey, pubkey + timestamp)[:8]
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(serverPubKey, "HmacSHA256"))
         mac.update(ephemeralPublic)
-        mac.update(sessionId, 32, 8) // timestamp bytes
+        mac.update(sessionId, 0, 4) // timestamp bytes
         val hmacFull = mac.doFinal()
-        System.arraycopy(hmacFull, 0, sessionId, 40, 8)
+        System.arraycopy(hmacFull, 0, sessionId, 4, 8)
 
-        return sessionId
+        return Pair(clientRandom, sessionId)
     }
 
-    private fun buildClientHello(sni: String, sessionId: ByteArray): ByteArray {
-        val clientRandom = ByteArray(32)
-        SecureRandom().nextBytes(clientRandom)
+    private fun buildClientHello(sni: String, clientRandom: ByteArray, sessionId: ByteArray): ByteArray {
+        // clientRandom contains our ephemeral pubkey (auth)
+        // sessionId contains timestamp + hmac (auth)
 
         // Build extensions
         val extensions = mutableListOf<ByteArray>()
