@@ -226,6 +226,7 @@ class NoxProtocol(
 
         socket.outputStream.write(wire)
         socket.outputStream.flush()
+        Log.d(TAG, "sendPacket: sent ${wire.size} bytes (data=${data.size})")
     }
 
     /**
@@ -238,18 +239,24 @@ class NoxProtocol(
         val input = socket.inputStream
 
         // Read encrypted length (2 bytes - server uses 2!)
+        Log.d(TAG, "receivePacket: waiting for length bytes...")
         val lenBytes = readFull(input, 2)
+        Log.d(TAG, "receivePacket: got raw len bytes: ${lenBytes[0].toInt() and 0xFF}, ${lenBytes[1].toInt() and 0xFF}")
 
         // Increment seq BEFORE decryption (server does this)
         rxCipher.incrementSeq()
         val seq = rxCipher.currentSeq()
+        Log.d(TAG, "receivePacket: using seq=$seq for length decryption")
 
         val mask = rxCipher.lengthMask2(seq)
+        Log.d(TAG, "receivePacket: mask=${mask[0].toInt() and 0xFF}, ${mask[1].toInt() and 0xFF}")
         lenBytes[0] = (lenBytes[0].toInt() xor mask[0].toInt()).toByte()
         lenBytes[1] = (lenBytes[1].toInt() xor mask[1].toInt()).toByte()
         val length = ((lenBytes[0].toInt() and 0xFF) shl 8) or (lenBytes[1].toInt() and 0xFF)
+        Log.d(TAG, "receivePacket: decrypted length=$length")
 
         if (length < TAG_SIZE || length > MTU + 3 + TAG_SIZE + 256) {
+            Log.e(TAG, "receivePacket: INVALID length $length (min=$TAG_SIZE, max=${MTU + 3 + TAG_SIZE + 256})")
             throw Exception("Invalid frame length: $length")
         }
 

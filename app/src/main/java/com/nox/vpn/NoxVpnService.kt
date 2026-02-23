@@ -348,7 +348,8 @@ class NoxVpnService : VpnService() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "NOX inbound error: ${e.message}")
+                Log.e(TAG, "NOX inbound error: ${e.message}", e)
+                e.printStackTrace()
             }
         }
 
