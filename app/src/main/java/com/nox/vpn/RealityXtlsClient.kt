@@ -334,16 +334,10 @@ class RealityXtlsClient(
     }
 
     private fun sendClientFinished() {
-        // In full TLS 1.3, we'd need to send encrypted Finished
-        // For Reality, after auth verification, server switches to NOX protocol
-        // We just need to signal we're ready
-
-        // Send ChangeCipherSpec (for compatibility)
-        val ccs = byteArrayOf(
-            TLS_CHANGE_CIPHER, 0x03, 0x03, 0x00, 0x01, 0x01
-        )
-        outputStream!!.write(ccs)
-        outputStream!!.flush()
+        // После Reality XTLS auth сервер сразу переключается на NOX протокол
+        // НЕ нужно отправлять CCS - это ломает NOX handshake!
+        // Просто ничего не делаем - NOX ClientHello пойдёт напрямую
+        Log.d(TAG, "Reality handshake done, ready for NOX protocol")
     }
 
     fun getInputStream(): InputStream = inputStream!!
