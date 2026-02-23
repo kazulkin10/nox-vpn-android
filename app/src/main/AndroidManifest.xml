@@ -29,6 +29,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".LogsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.NoxVPN"/>
+
         <service
             android:name=".NoxVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"

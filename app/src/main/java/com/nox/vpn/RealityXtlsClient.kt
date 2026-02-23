@@ -1,6 +1,7 @@
 package com.nox.vpn
 
 import android.util.Log
+import com.nox.vpn.AppLogger as L
 import org.bouncycastle.crypto.agreement.X25519Agreement
 import org.bouncycastle.crypto.generators.X25519KeyPairGenerator
 import org.bouncycastle.crypto.params.X25519KeyGenerationParameters
@@ -57,7 +58,7 @@ class RealityXtlsClient(
      * Returns the underlying socket for NOX protocol
      */
     fun connect(): Socket {
-        Log.d(TAG, "Connecting to $host:$port (SNI: $sni)")
+        L.d(TAG, "Connecting to $host:$port (SNI: $sni)")
 
         // Generate ephemeral X25519 key pair
         val keyGen = X25519KeyPairGenerator()
@@ -72,7 +73,7 @@ class RealityXtlsClient(
         // - client_random (32 bytes) = ephemeral pubkey
         // - session_id (12 bytes) = timestamp(4) + hmac(8)
         val (authClientRandom, authSessionId) = generateAuthData()
-        Log.d(TAG, "Generated auth: client_random=${authClientRandom.size}b, session_id=${authSessionId.size}b")
+        L.d(TAG, "Generated auth: client_random=${authClientRandom.size}b, session_id=${authSessionId.size}b")
 
         // Connect TCP
         socket = Socket()
@@ -86,7 +87,7 @@ class RealityXtlsClient(
         val clientHello = buildClientHello(sni, authClientRandom, authSessionId)
         outputStream!!.write(clientHello)
         outputStream!!.flush()
-        Log.d(TAG, "Sent ClientHello: ${clientHello.size} bytes")
+        L.d(TAG, "Sent ClientHello: ${clientHello.size} bytes")
 
         // Receive and process ServerHello (extract server_random for ECDH)
         val serverHello = readTlsRecord()
@@ -96,13 +97,13 @@ class RealityXtlsClient(
 
         // Extract server_random and compute shared secret
         extractServerRandomAndComputeSecret(serverHello)
-        Log.d(TAG, "Computed shared secret from server_random")
+        L.d(TAG, "Computed shared secret from server_random")
 
         // Continue TLS handshake - receive remaining server messages
         // (EncryptedExtensions, Certificate, CertificateVerify, Finished)
         while (true) {
             val record = readTlsRecord()
-            Log.d(TAG, "Received TLS record type: ${record[0]}")
+            L.d(TAG, "Received TLS record type: ${record[0]}")
 
             // After receiving server Finished, send our response
             if (record[0] == TLS_HANDSHAKE) {
@@ -114,7 +115,7 @@ class RealityXtlsClient(
 
             if (record[0] == TLS_CHANGE_CIPHER || record[0] == TLS_APPLICATION_DATA) {
                 // Server is done with handshake
-                Log.d(TAG, "Received server handshake finished (type=${record[0]}), ready for NOX")
+                L.d(TAG, "Received server handshake finished (type=${record[0]}), ready for NOX")
                 break
             }
 
@@ -128,9 +129,9 @@ class RealityXtlsClient(
         // Send ChangeCipherSpec + Finished
         sendClientFinished()
 
-        Log.d(TAG, "Reality XTLS handshake complete!")
-        Log.d(TAG, "Socket connected=${socket?.isConnected}, closed=${socket?.isClosed}")
-        Log.d(TAG, "Returning socket for NOX protocol, input available=${inputStream?.available()}")
+        L.d(TAG, "Reality XTLS handshake complete!")
+        L.d(TAG, "Socket connected=${socket?.isConnected}, closed=${socket?.isClosed}")
+        L.d(TAG, "Returning socket for NOX protocol, input available=${inputStream?.available()}")
         return socket!!
     }
 
@@ -345,14 +346,14 @@ class RealityXtlsClient(
         mac.update("nox-reality-secret".toByteArray())
         sharedSecret = mac.doFinal()
 
-        Log.d(TAG, "Shared secret computed")
+        L.d(TAG, "Shared secret computed")
     }
 
     private fun sendClientFinished() {
         // После Reality XTLS auth сервер сразу переключается на NOX протокол
         // НЕ нужно отправлять CCS - это ломает NOX handshake!
         // Просто ничего не делаем - NOX ClientHello пойдёт напрямую
-        Log.d(TAG, "Reality handshake done, ready for NOX protocol")
+        L.d(TAG, "Reality handshake done, ready for NOX protocol")
     }
 
     fun getInputStream(): InputStream = inputStream!!

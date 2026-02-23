@@ -1,6 +1,7 @@
 package com.nox.vpn
 
 import android.util.Log
+import com.nox.vpn.AppLogger as L
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
 import org.bouncycastle.crypto.engines.ChaCha7539Engine
@@ -51,17 +52,17 @@ class NoxProtocol(
      * @return assigned IPv4 address
      */
     fun handshake(): String {
-        Log.d(TAG, "Starting NOX handshake, socket connected=${socket.isConnected}, closed=${socket.isClosed}")
+        L.d(TAG, "Starting NOX handshake, socket connected=${socket.isConnected}, closed=${socket.isClosed}")
         val input = socket.inputStream
         val output = socket.outputStream
-        Log.d(TAG, "Got streams, ready to send ClientHello")
+        L.d(TAG, "Got streams, ready to send ClientHello")
 
         // Generate client ephemeral keypair using Tink's X25519
         val clientPrivate = X25519.generatePrivateKey()
         val clientPublic = X25519.publicFromPrivate(clientPrivate)
 
-        Log.d(TAG, "Client public key: ${clientPublic.toHex()}")
-        Log.d(TAG, "Server public key: ${serverPublicKey.toHex()}")
+        L.d(TAG, "Client public key: ${clientPublic.toHex()}")
+        L.d(TAG, "Server public key: ${serverPublicKey.toHex()}")
 
         // Build ClientHello payload
         val padding = ByteArray(64)
@@ -87,7 +88,7 @@ class NoxProtocol(
 
         // Derive early key: DH(client_ephemeral, server_static)
         val esSecret = X25519.computeSharedSecret(clientPrivate, serverPublicKey)
-        Log.d(TAG, "ES shared secret: ${esSecret.toHex()}")
+        L.d(TAG, "ES shared secret: ${esSecret.toHex()}")
 
         val earlyKey = Hkdf.computeHkdf(
             "HMACSHA256",
@@ -96,7 +97,7 @@ class NoxProtocol(
             "noxv3-hello".toByteArray(),
             KEY_SIZE
         )
-        Log.d(TAG, "Early key: ${earlyKey.toHex()}")
+        L.d(TAG, "Early key: ${earlyKey.toHex()}")
 
         // Encrypt ClientHello using XChaCha20-Poly1305 (BouncyCastle)
         val nonce = ByteArray(NONCE_SIZE)
@@ -104,8 +105,8 @@ class NoxProtocol(
 
         val ciphertext = xchachaSeal(earlyKey, nonce, payloadBytes)
 
-        Log.d(TAG, "Nonce: ${nonce.toHex()}")
-        Log.d(TAG, "Ciphertext length: ${ciphertext.size}")
+        L.d(TAG, "Nonce: ${nonce.toHex()}")
+        L.d(TAG, "Ciphertext length: ${ciphertext.size}")
 
         // Wire format: client_ephemeral(32) + nonce(24) + len_xor(2) + ciphertext
         val totalLen = ciphertext.size
@@ -124,17 +125,17 @@ class NoxProtocol(
 
         output.write(wire.array())
         output.flush()
-        Log.d(TAG, "Sent ClientHello: ${wire.array().size} bytes")
+        L.d(TAG, "Sent ClientHello: ${wire.array().size} bytes")
 
         // Read ServerHello
         // First: server_ephemeral(32)
-        Log.d(TAG, "Waiting for ServerHello (32 bytes ephemeral)...")
+        L.d(TAG, "Waiting for ServerHello (32 bytes ephemeral)...")
         val serverEphemeral = readFull(input, 32)
-        Log.d(TAG, "Server ephemeral received: ${serverEphemeral.toHex()}")
+        L.d(TAG, "Server ephemeral received: ${serverEphemeral.toHex()}")
 
         // Derive full session key
         val eeSecret = X25519.computeSharedSecret(clientPrivate, serverEphemeral)
-        Log.d(TAG, "EE shared secret: ${eeSecret.toHex()}")
+        L.d(TAG, "EE shared secret: ${eeSecret.toHex()}")
 
         val transcript = sha256(payloadBytes)
         val combined = esSecret + eeSecret
@@ -145,7 +146,7 @@ class NoxProtocol(
             "noxv3-session".toByteArray(),
             KEY_SIZE
         )
-        Log.d(TAG, "Session key: ${sessionKey.toHex()}")
+        L.d(TAG, "Session key: ${sessionKey.toHex()}")
 
         // Read rest of ServerHello
         val serverNonce = readFull(input, NONCE_SIZE)
@@ -154,7 +155,7 @@ class NoxProtocol(
         serverLenEnc[1] = (serverLenEnc[1].toInt() xor serverNonce[1].toInt()).toByte()
         val serverLen = ((serverLenEnc[0].toInt() and 0xFF) shl 8) or (serverLenEnc[1].toInt() and 0xFF)
 
-        Log.d(TAG, "Server ciphertext length: $serverLen")
+        L.d(TAG, "Server ciphertext length: $serverLen")
 
         if (serverLen < 50 || serverLen > 1024) {
             throw Exception("Invalid ServerHello length: $serverLen")
@@ -185,7 +186,7 @@ class NoxProtocol(
         val ipv4Bytes = serverPayload.sliceArray(ipv4Offset until ipv4Offset + 4)
         assignedIp = "${ipv4Bytes[0].toInt() and 0xFF}.${ipv4Bytes[1].toInt() and 0xFF}.${ipv4Bytes[2].toInt() and 0xFF}.${ipv4Bytes[3].toInt() and 0xFF}"
 
-        Log.d(TAG, "Assigned IP: $assignedIp")
+        L.d(TAG, "Assigned IP: $assignedIp")
 
         // Create TX/RX ciphers
         val txKey = Hkdf.computeHkdf("HMACSHA256", sessionKey, null, "noxv3-tx".toByteArray(), KEY_SIZE)
@@ -229,7 +230,7 @@ class NoxProtocol(
 
         socket.outputStream.write(wire)
         socket.outputStream.flush()
-        Log.d(TAG, "sendPacket: sent ${wire.size} bytes (data=${data.size})")
+        L.d(TAG, "sendPacket: sent ${wire.size} bytes (data=${data.size})")
     }
 
     /**
@@ -242,24 +243,24 @@ class NoxProtocol(
         val input = socket.inputStream
 
         // Read encrypted length (2 bytes - server uses 2!)
-        Log.d(TAG, "receivePacket: waiting for length bytes...")
+        L.d(TAG, "receivePacket: waiting for length bytes...")
         val lenBytes = readFull(input, 2)
-        Log.d(TAG, "receivePacket: got raw len bytes: ${lenBytes[0].toInt() and 0xFF}, ${lenBytes[1].toInt() and 0xFF}")
+        L.d(TAG, "receivePacket: got raw len bytes: ${lenBytes[0].toInt() and 0xFF}, ${lenBytes[1].toInt() and 0xFF}")
 
         // Increment seq BEFORE decryption (server does this)
         rxCipher.incrementSeq()
         val seq = rxCipher.currentSeq()
-        Log.d(TAG, "receivePacket: using seq=$seq for length decryption")
+        L.d(TAG, "receivePacket: using seq=$seq for length decryption")
 
         val mask = rxCipher.lengthMask2(seq)
-        Log.d(TAG, "receivePacket: mask=${mask[0].toInt() and 0xFF}, ${mask[1].toInt() and 0xFF}")
+        L.d(TAG, "receivePacket: mask=${mask[0].toInt() and 0xFF}, ${mask[1].toInt() and 0xFF}")
         lenBytes[0] = (lenBytes[0].toInt() xor mask[0].toInt()).toByte()
         lenBytes[1] = (lenBytes[1].toInt() xor mask[1].toInt()).toByte()
         val length = ((lenBytes[0].toInt() and 0xFF) shl 8) or (lenBytes[1].toInt() and 0xFF)
-        Log.d(TAG, "receivePacket: decrypted length=$length")
+        L.d(TAG, "receivePacket: decrypted length=$length")
 
         if (length < TAG_SIZE || length > MTU + 3 + TAG_SIZE + 256) {
-            Log.e(TAG, "receivePacket: INVALID length $length (min=$TAG_SIZE, max=${MTU + 3 + TAG_SIZE + 256})")
+            L.e(TAG, "receivePacket: INVALID length $length (min=$TAG_SIZE, max=${MTU + 3 + TAG_SIZE + 256})")
             throw Exception("Invalid frame length: $length")
         }
 
@@ -453,7 +454,7 @@ class NoxProtocol(
         mac.doFinal(computedTag, 0)
 
         if (!constantTimeEquals(tag, computedTag)) {
-            Log.e(TAG, "Tag verification failed")
+            L.e(TAG, "Tag verification failed")
             return null
         }
 

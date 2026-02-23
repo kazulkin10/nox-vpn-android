@@ -287,6 +287,16 @@
             app:iconPadding="0dp"
             app:cornerRadius="12dp"
             app:backgroundTint="@color/primary"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_marginEnd="8dp"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnLogs"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:text="📋"
+            app:cornerRadius="12dp"
+            app:backgroundTint="@color/bg_card_elevated"
             style="@style/Widget.Material3.Button.IconButton"/>
     </LinearLayout>
 

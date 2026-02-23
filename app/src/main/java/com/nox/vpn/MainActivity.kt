@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConnect: ImageButton
     private lateinit var btnImport: MaterialButton
     private lateinit var btnScan: MaterialButton
+    private lateinit var btnLogs: MaterialButton
     private lateinit var tvStatus: TextView
     private lateinit var tvTime: TextView
     private lateinit var tvPing: TextView
@@ -87,6 +88,7 @@ class MainActivity : AppCompatActivity() {
         tvServerInfo = findViewById(R.id.tvServerInfo)
         serverIndicator = findViewById(R.id.serverIndicator)
         outerRing = findViewById(R.id.outerRing)
+        btnLogs = findViewById(R.id.btnLogs)
     }
 
     private fun setupListeners() {
@@ -101,6 +103,10 @@ class MainActivity : AppCompatActivity() {
         btnImport.setOnClickListener { importFromClipboard() }
         btnScan.setOnClickListener {
             Toast.makeText(this, "QR Scanner coming soon", Toast.LENGTH_SHORT).show()
+        }
+
+        btnLogs.setOnClickListener {
+            startActivity(Intent(this, LogsActivity::class.java))
         }
     }
 
