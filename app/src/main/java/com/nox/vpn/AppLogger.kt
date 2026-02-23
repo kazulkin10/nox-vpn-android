@@ -94,7 +94,7 @@ object AppLogger {
                 |Time: ${Date()}
                 |Android: ${android.os.Build.VERSION.SDK_INT}
                 |Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}
-                |App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})
+                |App: 4.8-logs
                 |=== Logs ===
                 |$logsText
             """.trimMargin()
