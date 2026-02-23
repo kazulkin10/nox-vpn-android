@@ -50,3 +50,4 @@ dependencies {
     // Google Tink for XChaCha20-Poly1305
     implementation 'com.google.crypto.tink:tink-android:1.12.0'
 }
+// Build trigger: Пн 23 фев 2026 11:58:12 MSK
