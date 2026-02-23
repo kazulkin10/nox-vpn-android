@@ -51,8 +51,10 @@ class NoxProtocol(
      * @return assigned IPv4 address
      */
     fun handshake(): String {
+        Log.d(TAG, "Starting NOX handshake, socket connected=${socket.isConnected}, closed=${socket.isClosed}")
         val input = socket.inputStream
         val output = socket.outputStream
+        Log.d(TAG, "Got streams, ready to send ClientHello")
 
         // Generate client ephemeral keypair using Tink's X25519
         val clientPrivate = X25519.generatePrivateKey()
@@ -126,8 +128,9 @@ class NoxProtocol(
 
         // Read ServerHello
         // First: server_ephemeral(32)
+        Log.d(TAG, "Waiting for ServerHello (32 bytes ephemeral)...")
         val serverEphemeral = readFull(input, 32)
-        Log.d(TAG, "Server ephemeral: ${serverEphemeral.toHex()}")
+        Log.d(TAG, "Server ephemeral received: ${serverEphemeral.toHex()}")
 
         // Derive full session key
         val eeSecret = X25519.computeSharedSecret(clientPrivate, serverEphemeral)

@@ -114,6 +114,7 @@ class RealityXtlsClient(
 
             if (record[0] == TLS_CHANGE_CIPHER || record[0] == TLS_APPLICATION_DATA) {
                 // Server is done with handshake
+                Log.d(TAG, "Received server handshake finished (type=${record[0]}), ready for NOX")
                 break
             }
 
@@ -128,6 +129,8 @@ class RealityXtlsClient(
         sendClientFinished()
 
         Log.d(TAG, "Reality XTLS handshake complete!")
+        Log.d(TAG, "Socket connected=${socket?.isConnected}, closed=${socket?.isClosed}")
+        Log.d(TAG, "Returning socket for NOX protocol, input available=${inputStream?.available()}")
         return socket!!
     }
 
